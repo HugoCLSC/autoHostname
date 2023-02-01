@@ -1,0 +1,14 @@
+[Unit]
+Description= Automatically changes the hostname of the device if there is another device on the network with the same name
+After=multi-user.target network-online.target avahi-daemon.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+RemainAfterExit=yes
+ExecStart=/home/pi/scripts/autoHostname
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target

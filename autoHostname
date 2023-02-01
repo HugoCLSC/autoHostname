@@ -1,0 +1,109 @@
+#!/bin/bash
+
+# Store the current hostname
+current_hostname=$(hostname)
+# Store the device number counter to test hostnames incase there is the need to change the device's hostname
+device_number=0
+# Store this device ip address
+current_ip=$(ifconfig | grep -Eo 'inet (addr:)?([0-9]*\.){3}[0-9]*' | grep -Eo '([0-9]*\.){3}[0-9]*' | grep -v '127.0.0.1' | sed 's/^[ \t]*//' | sed 's/[ \t]*$//')
+echo "$current_ip"
+# Store a hostname that is going to be used for testing
+base_hostname="blockswifi"
+test_hostname="blockswifi"
+#test_hostname=$(hostname)
+
+test_result=0
+
+test_same_hostname() {
+  test_result=1
+
+  #Store the current hostname
+  current_hostname=$(hostname)
+  #Use avahi-browse to list all devices on the local network
+  echo "Scanning all Devices"
+  while mapfile -t -n 2 line && ((${#line[@]})); do
+    echo "Test Run...."
+    #echo "INFO: Testing hostname: $test_hostname"
+    option=$(echo ${line[0]} | awk -F "=" '{print $1}' | tr -d "[]")
+    if [[ "$option"=="hostname" ]]; then
+      #Extract the hostname from each line
+      hostname=$(echo ${line[0]} | awk -F "=" '{print $2}' | tr -d "[]" | cut -d "." -f1 | sed 's/^[ \t]*//' | sed 's/[ \t]*$//')
+      #	echo "Hostname detected: $hostname"
+    fi
+    option=$(echo ${line[1]} | awk -F "=" '{print $1}' | tr -d "[]")
+    if [[ "$option"=="address" ]]; then
+      #Extract the ip from the each line
+      ip_test=$(echo ${line[1]} | awk -F "=" '{print $2}' | tr -d "[]" | sed 's/^[ \t]*//' | sed 's/[ \t]*$//')
+      #	echo "Address Detected: $ip_test"
+    fi
+    #Check if the hostname is the same as the current device's hostname
+    #echo "INFO: IP ETSTE: $ip_test"
+    #echo "INFO: CURRENt IP: $current_ip"
+    #echo "INFO: Hostname FOUND: $hostname"
+    #echo "INFO: Current hostname: $current_hostname"
+
+    if [ "$current_ip" != "$ip_test" ]; then
+      if [ "$hostname" == "$test_hostname" ]; then
+        #If it returns here it means there is already a device with this hostname on the network
+        echo "There is already a device with the hostname: $test_hostname"
+        test_result=0
+        break
+      else
+        echo "The hostnames are different here and the ip is also different"
+      fi
+    elif [ "$current_ip" == "$ip_test" ]; then
+      echo "INFO: This is the current device's hostname"
+    fi
+
+  done < <(avahi-browse -d local _octoprint._tcp -t -r | grep -w "hostname\|address")
+
+  #If it gets here and returns false it means there are on devices with this hostname
+  if [ "$test_result" == "0" ]; then
+    return 0
+  else
+    echo "Device's Hostname is unique"
+    if [ "$current_hostname" == "$test_hostname" ]; then
+      echo "Tested the current hostname and it's already unique"
+    fi
+    return 1
+  fi
+}
+
+test_same_hostname
+test_result=$?
+
+if [ "$test_result" == "1" ]; then
+  echo "The test was imidiatly 1"
+  exit 1
+fi
+while [ "$test_result" == "0" ]; do
+  if [ "$test_result" == "0" ]; then
+    echo "Test result said that the hostname is already used in the network, trying another hostname......"
+    device_number=$((device_number + 1))
+    test_hostname="$base_hostname-$device_number"
+    echo "Testing with the hostname: $test_hostname"
+    test_same_hostname
+    test_result=$?
+  fi
+  if [ "$test_result" == "1" ]; then
+    if [ "$current_hostname" != "$test_hostname" ]; then
+      echo "Test result was 1 and the current and test hostnames are different"
+      # Publish the domain (hostname)
+      echo "Changing device hostname to: $test_hostname ....."
+      sudo hostnamectl set-hostname $test_hostname
+      echo "Device hostname changed to $test_hostname"
+      sudo systemctl restart avahi-daemon
+      sudo systemctl daemon-reload
+      echo "Rebooting to ensure the usage of the new settings"
+      sudo reboot
+      break
+    elif [ "$current_hostname" == "$test_hostname" ]; then
+      echo "Test result was that the test hostname is unique and the current and test hostnames are equal"
+      echo "So no need to change hostnames"
+      break
+    else
+      echo "Entered in else"
+      break
+    fi
+  fi
+done
