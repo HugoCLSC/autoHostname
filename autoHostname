@@ -71,10 +71,10 @@ test_same_hostname() {
 
 add_hostname_to_hosts(){
   # Backup the file 
-  cp /etc/hosts.conf /etc/hosts.conf.bak
+  cp /etc/hosts /etc/hosts.bak
 
   # Replace the line starting with "127.0.1.1"
-  sed "/^127.0.1.1/ s/ .*$/ $current_hostname/" /etc/hosts.conf.bak > /etc/hosts.conf 
+  sed "/^127.0.1.1/ s/ .*$/ $current_hostname/" /etc/hosts.bak > /etc/hosts 
 }
 
 
