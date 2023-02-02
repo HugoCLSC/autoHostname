@@ -69,6 +69,15 @@ test_same_hostname() {
   fi
 }
 
+add_hostname_to_hosts(){
+  # Backup the file 
+  cp /etc/hosts.conf /etc/hosts.conf.bak
+
+  # Replace the line starting with "127.0.1.1"
+  sed "/^127.0.1.1/ s/ .*$/ $current_hostname/" /etc/hosts.conf.bak > /etc/hosts.conf 
+}
+
+
 test_same_hostname
 test_result=$?
 
@@ -91,6 +100,8 @@ while [ "$test_result" == "0" ]; do
       # Publish the domain (hostname)
       echo "Changing device hostname to: $test_hostname ....."
       sudo hostnamectl set-hostname $test_hostname
+      echo "Adding the hostname to hosts.conf file"
+      add_hostname_to_hosts
       echo "Device hostname changed to $test_hostname"
       sudo systemctl restart avahi-daemon
       sudo systemctl daemon-reload
@@ -100,6 +111,10 @@ while [ "$test_result" == "0" ]; do
     elif [ "$current_hostname" == "$test_hostname" ]; then
       echo "Test result was that the test hostname is unique and the current and test hostnames are equal"
       echo "So no need to change hostnames"
+      
+      avahi-publish -s $current_hostname _http._tcp 80
+      avahi-publish -s $current_hostname _octoprint._tcp 80
+
       break
     else
       echo "Entered in else"
