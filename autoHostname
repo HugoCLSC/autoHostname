@@ -10,60 +10,70 @@ echo "$current_ip"
 # Store a hostname that is going to be used for testing
 base_hostname="blockswifi"
 test_hostname="blockswifi"
-#test_hostname=$(hostname)
 
+# Store the hostname test result 
 test_result=0
 
-test_same_hostname() {
-  test_result=1
+# Store network connectivity state
+network_up=0
 
+test_same_hostname() {
+  test_result=0
   #Store the current hostname
   current_hostname=$(hostname)
   #Use avahi-browse to list all devices on the local network
   echo "Scanning all Devices"
-  while mapfile -t -n 2 line && ((${#line[@]})); do
-    echo "Test Run...."
-    #echo "INFO: Testing hostname: $test_hostname"
-    option=$(echo ${line[0]} | awk -F "=" '{print $1}' | tr -d "[]")
-    if [[ "$option"=="hostname" ]]; then
-      #Extract the hostname from each line
-      hostname=$(echo ${line[0]} | awk -F "=" '{print $2}' | tr -d "[]" | cut -d "." -f1 | sed 's/^[ \t]*//' | sed 's/[ \t]*$//')
-      #	echo "Hostname detected: $hostname"
-    fi
-    option=$(echo ${line[1]} | awk -F "=" '{print $1}' | tr -d "[]")
-    if [[ "$option"=="address" ]]; then
-      #Extract the ip from the each line
-      ip_test=$(echo ${line[1]} | awk -F "=" '{print $2}' | tr -d "[]" | sed 's/^[ \t]*//' | sed 's/[ \t]*$//')
-      #	echo "Address Detected: $ip_test"
-    fi
-    #Check if the hostname is the same as the current device's hostname
-    #echo "INFO: IP ETSTE: $ip_test"
-    #echo "INFO: CURRENt IP: $current_ip"
-    #echo "INFO: Hostname FOUND: $hostname"
-    #echo "INFO: Current hostname: $current_hostname"
-
-    if [ "$current_ip" != "$ip_test" ]; then
-      if [ "$hostname" == "$test_hostname" ]; then
-        #If it returns here it means there is already a device with this hostname on the network
-        echo "There is already a device with the hostname: $test_hostname"
-        test_result=0
-        break
-      else
-        echo "The hostnames are different here and the ip is also different"
+  avahi-browse -d local _octoprint._tcp -t -r | grep -w "hostname\|address"
+  if [ $? -eq 0 ]; then
+    while mapfile -t -n 2 line && ((${#line[@]})); do
+      echo "Test Run...."
+      #echo "INFO: Testing hostname: $test_hostname"
+      option=$(echo ${line[0]} | awk -F "=" '{print $1}' | tr -d "[]")
+      if [[ "$option"=="hostname" ]]; then
+        #Extract the hostname from each line
+        hostname=$(echo ${line[0]} | awk -F "=" '{print $2}' | tr -d "[]" | cut -d "." -f1 | sed 's/^[ \t]*//' | sed 's/[ \t]*$//')
+        #	echo "Hostname detected: $hostname"
       fi
-    elif [ "$current_ip" == "$ip_test" ]; then
-      echo "INFO: This is the current device's hostname"
-    fi
+      option=$(echo ${line[1]} | awk -F "=" '{print $1}' | tr -d "[]")
+      if [[ "$option"=="address" ]]; then
+        #Extract the ip from the each line
+        ip_test=$(echo ${line[1]} | awk -F "=" '{print $2}' | tr -d "[]" | sed 's/^[ \t]*//' | sed 's/[ \t]*$//')
+        #	echo "Address Detected: $ip_test"
+      fi
+      #Check if the hostname is the same as the current device's hostname
+      #echo "INFO: IP ETSTE: $ip_test"
+      #echo "INFO: CURRENt IP: $current_ip"
+      #echo "INFO: Hostname FOUND: $hostname"
+      #echo "INFO: Current hostname: $current_hostname"
 
-  done < <(avahi-browse -d local _octoprint._tcp -t -r | grep -w "hostname\|address")
+      if [ "$current_ip" != "$ip_test" ]; then
+        if [ "$hostname" == "$test_hostname" ]; then
+          #If it returns here it means there is already a device with this hostname on the network
+          echo "There is already a device with the hostname: $test_hostname"
+          test_result=0
+          break
+        else
+          echo "The hostnames are different here and the ip is also different"
+          test_result=1
+        fi
+      elif [ "$current_ip" == "$ip_test" ]; then
+        echo "INFO: This is the current device's hostname"
+	      test_result=1
+      fi
 
+    done < <(avahi-browse -d local _octoprint._tcp -t -r | grep -w "hostname\|address")
+  else
+    echo "Scan returned Nothing"
+    exit 1
+  fi
   #If it gets here and returns false it means there are on devices with this hostname
   if [ "$test_result" == "0" ]; then
     return 0
   else
-    echo "Device's Hostname is unique"
     if [ "$current_hostname" == "$test_hostname" ]; then
-      echo "Tested the current hostname and it's already unique"
+    	echo "Tested the current hostname and it's already unique"
+    else
+	echo "Encountered a unique hostname during the test"
     fi
     return 1
   fi
@@ -74,18 +84,27 @@ add_hostname_to_hosts(){
   cp /etc/hosts /etc/hosts.bak
 
   # Replace the line starting with "127.0.1.1"
-  sed "/^127.0.1.1/ s/ .*$/ $test_hostname/" /etc/hosts.bak > /etc/hosts 
+  sed "/^127.0.1.1/ s/ .*$/ $test_hostname/" /etc/hosts.bak > /etc/hosts
 }
 
+test_network_connectivity() {
+  # Ping Google DNS
+  ping -c 4 8.8.8.8 &> /dev/null
+  if [ $? -eq 0 ]; then
+    echo "Network connectivity is available"
+    network_up=1
+  else
+    echo "Network connectivity is not availabla"
+    network_up=0
+  fi
+}
 
 test_same_hostname
 test_result=$?
 
-if [ "$test_result" == "1" ]; then
-  echo "The test was imidiatly 1"
-  exit 1
-fi
-while [ "$test_result" == "0" ]; do
+test_network_connectivity
+
+while [ "$test_result" == "0" ] && [ "$network_up" == "1" ]; do
   if [ "$test_result" == "0" ]; then
     echo "Test result said that the hostname is already used in the network, trying another hostname......"
     device_number=$((device_number + 1))
@@ -96,29 +115,27 @@ while [ "$test_result" == "0" ]; do
   fi
   if [ "$test_result" == "1" ]; then
     if [ "$current_hostname" != "$test_hostname" ]; then
-      echo "Test result was 1 and the current and test hostnames are different"
-      # Publish the domain (hostname)
-      echo "Changing device hostname to: $test_hostname ....."
-      sudo hostnamectl set-hostname $test_hostname
-      echo "Adding the hostname to hosts file"
-      add_hostname_to_hosts
-      echo "Device hostname changed to $test_hostname"
-      sudo systemctl restart avahi-daemon
-      sudo systemctl daemon-reload
-      echo "Rebooting to ensure the usage of the new settings"
-      sudo reboot
-      break
-    elif [ "$current_hostname" == "$test_hostname" ]; then
-      echo "Test result was that the test hostname is unique and the current and test hostnames are equal"
-      echo "So no need to change hostnames"
-      
-      avahi-publish -s $current_hostname _http._tcp 80
-      avahi-publish -s $current_hostname _octoprint._tcp 80
-
-      break
-    else
-      echo "Entered in else"
-      break
+	echo "Test result was 1 and the current and test hostnames are different"
+	# Publish the domain (hostname)
+	echo "Changing device hostname to: $test_hostname ....."
+	sudo hostnamectl set-hostname $test_hostname
+	echo "Adding the hostname to hosts.conf file"
+      	add_hostname_to_hosts
+	echo "Device hostname changed to $test_hostname"
+	sudo systemctl restart avahi-daemon
+	sudo systemctl daemon-reload	
+ 	echo "Rebooting to ensure the usage of the new settings"
+ #   	sudo reboot
+	break
+     elif [ "$current_hostname" == "$test_hostname" ]; then
+	echo "Test result was that the test hostname is unique and the current and test hostnames are equal"
+      	echo "So no need to change hostnames"	
+	avahi-publish -s $current_hostname _http._tcp 80
+	avahi-publish -s $current_hostname _octoprint._tcp 80
+	break
+     else 
+	echo "Entered in else"
+	break
     fi
   fi
 done
