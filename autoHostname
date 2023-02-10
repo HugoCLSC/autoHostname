@@ -11,11 +11,14 @@ echo "$current_ip"
 base_hostname="blockswifi"
 test_hostname="blockswifi"
 
-# Store the hostname test result 
+# Store the hostname test result
 test_result=0
 
 # Store network connectivity state
 network_up=0
+
+# Store how many times the service ran
+service_NCounter=$(sudo systemctl show autoHostname.service -p NRestarts)
 
 test_same_hostname() {
   test_result=0
@@ -58,7 +61,7 @@ test_same_hostname() {
         fi
       elif [ "$current_ip" == "$ip_test" ]; then
         echo "INFO: This is the current device's hostname"
-	      test_result=1
+        test_result=1
       fi
 
     done < <(avahi-browse -d local _octoprint._tcp -t -r | grep -w "hostname\|address")
@@ -71,25 +74,25 @@ test_same_hostname() {
     return 0
   else
     if [ "$current_hostname" == "$test_hostname" ]; then
-    	echo "Tested the current hostname and it's already unique"
+      echo "Tested the current hostname and it's already unique"
     else
-	echo "Encountered a unique hostname during the test"
+      echo "Encountered a unique hostname during the test"
     fi
     return 1
   fi
 }
 
-add_hostname_to_hosts(){
-  # Backup the file 
+add_hostname_to_hosts() {
+  # Backup the file
   cp /etc/hosts /etc/hosts.bak
 
   # Replace the line starting with "127.0.1.1"
-  sed "/^127.0.1.1/ s/ .*$/ $test_hostname/" /etc/hosts.bak > /etc/hosts
+  sed "/^127.0.1.1/ s/ .*$/ $test_hostname/" /etc/hosts.bak >/etc/hosts
 }
 
 test_network_connectivity() {
   # Ping Google DNS
-  ping -c 4 8.8.8.8 &> /dev/null
+  ping -c 4 8.8.8.8 &>/dev/null
   if [ $? -eq 0 ]; then
     echo "Network connectivity is available"
     network_up=1
@@ -99,12 +102,39 @@ test_network_connectivity() {
   fi
 }
 
+change_hostname() {
+  echo "Changing device hostname to: $test_hostname ....."
+  sudo hostnamectl set-hostname $test_hostname
+  echo "Adding the hostname to hosts.conf file"
+  add_hostname_to_hosts
+  echo "Device hostname changed to $test_hostname"
+  sudo systemctl restart avahi-daemon
+  sudo systemctl daemon-reload
+  sudo systemctl restart NetworkManager
+  disable_autoHostname
+  echo "Rebooting to ensure the usage of the new settings"
+  sudo reboot
+}
+
+disable_autoHostname() {
+  echo "Disabling autoHostname service"
+  sudo systemctl disable autoHostname
+}
+
 test_same_hostname
 test_result=$?
 
 test_network_connectivity
 
+if [ "$test_result" == "1" ] && [ "$network_up" == "1" ] && [ "$current_hostname" != "$test_hostname" ]; then
+  # * The test ran and returned imidiatly 1 meaning the first tested hostname is unique,
+  # * either because there is no other device with the same hostname
+  # * on the network or because the only one that appeared was the current devices
+  change_hostname
+fi
+
 while [ "$test_result" == "0" ] && [ "$network_up" == "1" ]; do
+  # * This while is when the first test was 0, indicating that there already was a equal hostname being used on the network
   if [ "$test_result" == "0" ]; then
     echo "Test result said that the hostname is already used in the network, trying another hostname......"
     device_number=$((device_number + 1))
@@ -114,28 +144,20 @@ while [ "$test_result" == "0" ] && [ "$network_up" == "1" ]; do
     test_result=$?
   fi
   if [ "$test_result" == "1" ]; then
+    # * We enter in here if the test_same_hostname function (that was called right before when the test was 0) returned 1 on the test
     if [ "$current_hostname" != "$test_hostname" ]; then
-	echo "Test result was 1 and the current and test hostnames are different"
-	# Publish the domain (hostname)
-	echo "Changing device hostname to: $test_hostname ....."
-	sudo hostnamectl set-hostname $test_hostname
-	echo "Adding the hostname to hosts.conf file"
-      	add_hostname_to_hosts
-	echo "Device hostname changed to $test_hostname"
-	sudo systemctl restart avahi-daemon
-	sudo systemctl daemon-reload	
- 	echo "Rebooting to ensure the usage of the new settings"
- #   	sudo reboot
-	break
-     elif [ "$current_hostname" == "$test_hostname" ]; then
-	echo "Test result was that the test hostname is unique and the current and test hostnames are equal"
-      	echo "So no need to change hostnames"	
-	avahi-publish -s $current_hostname _http._tcp 80
-	avahi-publish -s $current_hostname _octoprint._tcp 80
-	break
-     else 
-	echo "Entered in else"
-	break
+      echo "Test result was 1 and the current and test hostnames are different"
+      change_hostname
+      break
+    elif [ "$current_hostname" == "$test_hostname" ]; then
+      echo "Test result was that the test hostname is unique and the current and test hostnames are equal"
+      echo "So no need to change hostnames"
+      avahi-publish -s $current_hostname _http._tcp 80
+      avahi-publish -s $current_hostname _octoprint._tcp 80
+      break
+    else
+      echo "Entered in else"
+      break
     fi
   fi
 done
